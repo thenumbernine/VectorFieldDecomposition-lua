@@ -17,7 +17,7 @@ local bit = require 'bit'
 local CLEnv = require 'cl.obj.env'
 local clnumber = require 'cl.obj.number'
 
-local n = 32
+local n = 8
 
 local xmin = vec3d(-1,-1,-1) * 1.5
 local xmax = vec3d(1,1,1) * 1.5
@@ -82,18 +82,25 @@ inline real3 real3_scale(real3 a, real s) { return _real3(a.x * s, a.y * s, a.z 
 	env:kernel{
 		name = 'init',
 		argsOut = {self.fieldBuf},
-		body = [[
+		body = template([[
+	real3 xmin = _real3(<?=clnumber(xmin.x)?>, <?=clnumber(xmin.y)?>, <?=clnumber(xmin.z)?>);	
+	real3 xmax = _real3(<?=clnumber(xmax.x)?>, <?=clnumber(xmax.y)?>, <?=clnumber(xmax.z)?>);	
+	
 	real3 x = _real3(
-		((real)i.x + .5) / (real)size.x,
-		((real)i.y + .5) / (real)size.y,
-		((real)i.z + .5) / (real)size.z);
+		((real)i.x + .5) / (real)size.x * (xmax.x - xmin.x) + xmin.x,
+		((real)i.y + .5) / (real)size.y * (xmax.y - xmin.y) + xmin.y,
+		((real)i.z + .5) / (real)size.z * (xmax.z - xmin.z) + xmin.z);
 	real3 w1 = _real3(
 		x.x * x.z, 
 		x.y * x.z, 
 		1. - 2. * (x.x * x.x + x.y * x.y) - x.z * x.z);
 	real3 w2 = _real3(-x.y, x.x, 0);
 	field[index] = real3_add(real3_scale(w1, 1.5), w2);
-]]
+]], {
+	xmin = xmin,
+	xmax = xmax,
+	clnumber = clnumber,
+}),
 	}(self.fieldBuf)
 
 	-- initialize upload-to-texture
@@ -171,7 +178,11 @@ local arrow = {
 
 function App:update()
 	local env = self.env
-	
+
+	gl.glDisable(gl.GL_DEPTH_TEST)
+	gl.glEnable(gl.GL_BLEND)
+	gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE)
+
 	gl.glClear(bit.bor(gl.GL_COLOR_BUFFER_BIT, gl.GL_DEPTH_BUFFER_BIT))
 	
 	local ar = self.width / self.height
@@ -202,6 +213,9 @@ function App:update()
 			
 	fieldTex:unbind(0)
 	vectorFieldShader:useNone()
+	
+	gl.glDisable(gl.GL_BLEND)
+	gl.glEnable(gl.GL_DEPTH_TEST)
 
 end
 
