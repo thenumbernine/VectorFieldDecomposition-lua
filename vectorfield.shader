@@ -1,4 +1,5 @@
 varying vec4 color;
+//varying vec3 normal;
 
 <? 
 if vertexShader then 
@@ -19,7 +20,8 @@ void main() {
 	float value = length(dir);
 	dir /= value;
 
-	vec3 tv = vec3(-dir.y, dir.x, 0.);
+	vec3 ty = vec3(-dir.y, dir.x, 0.);
+	vec3 tz = vec3(0., 0., 1.);
 
 <? else ?>
 	
@@ -33,28 +35,32 @@ void main() {
 	float lxsq = dot(vx,vx);
 	float lysq = dot(vy,vy);
 	float lzsq = dot(vz,vz);
-	vec3 tv;
+	vec3 ty, tz;
 	if (lxsq > lysq) {		//x > y
 		if (lxsq > lzsq) {	//x > z, x > y
-			tv = vx;
+			ty = vx;
 		} else {			//z > x > y
-			tv = vz;
+			ty = vz;
 		}
 	} else {				//y >= x
 		if (lysq > lzsq) {	//y >= x, y > z
-			tv = vy;
+			ty = vy;
 		} else {			// z > y >= x
-			tv = vz;
+			ty = vz;
 		}
 	}
+	tz = normalize(cross(dir, ty));
 
 <? end ?>
 
-	color = vec4(1.,0.,0.,1.);
+	const float alpha = 1.;
+	color = vec4(1., 0., 0., alpha);
 
-	vec2 offset = gl_Vertex.xy;
-	vec3 v = gl_MultiTexCoord0.xyz * (xmax - xmin) + xmin + (offset.x * dir + offset.y * tv);
+	vec3 offset = gl_Vertex.xyz;
+	vec3 v = gl_MultiTexCoord0.xyz * (xmax - xmin) + xmin + (offset.x * dir + offset.y * ty + offset.z * tz);
 	gl_Position = gl_ProjectionMatrix * gl_ModelViewMatrix * vec4(v, 1.);
+
+	//normal = gl_NormalMatrix * gl_Normal;
 }
 
 <?
@@ -64,6 +70,9 @@ if fragmentShader then
 
 void main() {
 	gl_FragColor = color;
+	
+	//vec3 n = normalize(normal);
+	//gl_FragColor *= max(.1, -n.z);
 }
 
 <?

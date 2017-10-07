@@ -5,11 +5,10 @@ local vec3sz = require 'ffi.vec.vec3sz'
 local vec3d = require 'ffi.vec.vec3d'
 local class = require 'ext.class'
 local table = require 'ext.table'
+local range = require 'ext.range'
 local file = require 'ext.file'
 local GLApp = require 'glapp'
 local GLProgram = require 'gl.program'
-local GLTex2D = require 'gl.tex2d'
-local GLTex3D = require 'gl.tex3d'
 local Orbit = require 'glapp.orbit'
 local View = require 'glapp.view'
 local template = require 'template'
@@ -23,7 +22,6 @@ local xmin = vec3d(-1,-1,-1) * 1.5
 local xmax = vec3d(1,1,1) * 1.5
 
 local vectorFieldShader
-local fieldTex
 
 
 local App = class(Orbit(View.apply(GLApp)))
@@ -52,7 +50,6 @@ typedef union {
 #define _real3(x,y,z)	(real3){.s={x,y,z}}
 inline real3 real3_add(real3 a, real3 b) { return _real3(a.x + b.x, a.y + b.y, a.z + b.z); }
 inline real3 real3_scale(real3 a, real s) { return _real3(a.x * s, a.y * s, a.z * s); }
-
 ]],
 	}:concat'\n'
 
@@ -103,99 +100,84 @@ inline real3 real3_scale(real3 a, real s) { return _real3(a.x * s, a.y * s, a.z 
 }),
 	}(self.fieldBuf)
 
-	-- initialize upload-to-texture
-	local _class = env.base.dim < 3 and GLTex2D or GLTex3D
-	fieldTex = _class{
-		width = tonumber(env.base.size.x),
-		height = tonumber(env.base.size.y),
-		depth = tonumber(env.base.size.z),
-		internalFormat = gl.GL_RGBA32F,
-		format = gl.GL_RGBA,
-		type = gl.GL_FLOAT,
-		minFilter = gl.GL_NEAREST,
-		--magFilter = gl.GL_NEAREST,
-		magFilter = gl.GL_LINEAR,
-		wrap = {s=gl.GL_REPEAT, t=gl.GL_REPEAT, r=gl.GL_REPEAT},
+	local CLGLTexXFer = require 'gltex'
+	self.xfer = CLGLTexXFer{
+		env = env,
+		buffer = self.fieldBuf,
+		type = self.env.real,
+		channels = 3,
 	}
 
-	-- TODO put this in cl.obj.buffer
-	if env.useGLSharing then
-		self.texCLMem = CLImageGL{context=env.ctx, tex=fieldTex, write=true}
-	else
-		self.bufferTexPtr = ffi.new(env.real..'[?]', env.base.volume * 3)
-	end
-
-	-- update the texture
-	if env.useGLSharing then
-		-- copy to GL using cl_*_gl_sharing
-		gl.glFinish()
-		env.cmds:enqueueAcquireGLObjects{objs={self.texCLMem}}
-
-		copyFieldToTex()
-		
-		env.cmds:enqueueReleaseGLObjects{objs={self.texCLMem}}
-		env.cmds:finish()
-	else
-		local ptr = self.bufferTexPtr
-		local tex = fieldTex
-		local channels = 3
-		local format = gl.GL_RGB
-		env.cmds:enqueueReadBuffer{buffer=self.fieldBuf.obj, block=true, size=ffi.sizeof(env.real) * env.base.volume * channels, ptr=ptr}
-		local destPtr = ptr
-		if env.real == 'double' then
-			-- can this run in place?
-			destPtr = ffi.cast('float*', ptr)
-			for i=0,env.base.volume*channels-1 do
-				destPtr[i] = ptr[i]
-			end
-		end
-		tex:bind()
-		if self.env.base.dim < 3 then
-			gl.glTexSubImage2D(gl.GL_TEXTURE_2D, 0, 0, 0, tex.width, tex.height, format, gl.GL_FLOAT, destPtr)
-		else
-			for z=0,tex.depth-1 do
-				gl.glTexSubImage3D(gl.GL_TEXTURE_3D, 0, 0, 0, z, tex.width, tex.height, 1, format, gl.GL_FLOAT, destPtr + channels * tex.width * tex.height * z)
-			end
-		end
-		tex:unbind()
-	end
+	self.xfer:update()
 end
 
---[[
-local arrow = {
-	{-.5, 0.},
-	{.5, 0.},
-	{.2, .3},
-	{.5, 0.},
-	{.2, -.3},
-	{.5, 0.},
-}
+-- [[
+local geom = gl.GL_LINES
+local vtxs = table{
+	{-.5, 0, 0},
+	{.5, 0, 0},
+	{.2, .3, 0},
+	{.5, 0, 0},
+	{.2, -.3, 0},
+	{.5, 0, 0},
+}:map(function(t) return vec3d(table.unpack(t)) * .3 end)
+local tris = range(#vtxs)
 --]]
-local arrow = {
-	{-.5, 0.},
-	{.5, 0.},
+--[[
+local geom = gl.GL_LINES
+local vtxs = {
+	{-.5, 0, 0},
+	{.5, 0, 0},
 }
+local tris = range(#vtxs)
+--]]
+--[[
+local geom = gl.GL_TRIANGLES
+local res = 10
+local vtxs = table{vec3d(.5 * .5, 0, 0)}:append(range(res):map(function(i)
+	local theta = (i-.5)/res * 2 * math.pi
+	return vec3d(-.5, .5 * math.cos(theta), .5 * math.sin(theta)) * .2
+end)):append{vec3d(-.5, 0, 0) * .2}
+local tris = table()
+for i=1,res do
+	tris:append{1, i+1, i%res+2}
+	tris:append{res+2, i%res+2, i+1}
+end
+--]]
+local normals 
+if geom == gl.GL_TRIANGLES then
+	normals = vtxs:map(function() return vec3d(0,0,0) end)
+	for j=1,#tris,3 do
+		local a, b, c = vtxs[tris[j]], vtxs[tris[j+1]], vtxs[tris[j+2]]
+		local n = (b - a):cross(c - a):normalize()
+		for k=0,2 do
+			normals[tris[j+k]] = normals[tris[j+k]] + n
+		end
+	end
+	for i=1,#normals do normals[i] = normals[i]:normalize() end
+end
 
 function App:update()
+	gl.glClear(bit.bor(gl.GL_COLOR_BUFFER_BIT, gl.GL_DEPTH_BUFFER_BIT))
+
 	local env = self.env
 
-	gl.glDisable(gl.GL_DEPTH_TEST)
-	gl.glEnable(gl.GL_BLEND)
-	gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE)
-
-	gl.glClear(bit.bor(gl.GL_COLOR_BUFFER_BIT, gl.GL_DEPTH_BUFFER_BIT))
+	gl.glDisable(gl.GL_CULL_FACE)
+	gl.glEnable(gl.GL_DEPTH_TEST)
+	--gl.glEnable(gl.GL_BLEND)
+	--gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE)
 	
 	local ar = self.width / self.height
 	self.view:setup(ar)
 
 	vectorFieldShader:use()
 
-	fieldTex:bind(0)
+	self.xfer.tex:bind(0)
 	
 	gl.glUniform3f(vectorFieldShader.uniforms.xmin.loc, xmin:unpack())
 	gl.glUniform3f(vectorFieldShader.uniforms.xmax.loc, xmax:unpack())
 
-	gl.glBegin(gl.GL_LINES)
+	gl.glBegin(geom)
 	for k=0,tonumber(env.base.size.z-1) do
 		for j=0,tonumber(env.base.size.y-1) do
 			for i=0,tonumber(env.base.size.x-1) do
@@ -203,15 +185,16 @@ function App:update()
 				local y = (j + .5) / tonumber(env.base.size.y)
 				local z = (k + .5) / tonumber(env.base.size.z)
 				gl.glTexCoord3f(x, y, z)	
-				for _,q in ipairs(arrow) do
-					gl.glVertex2f(q[1], q[2])
+				for _,t in ipairs(tris) do
+					if normals then gl.glNormal3f(normals[t]:unpack()) end
+					gl.glVertex3f(vtxs[t]:unpack())
 				end
 			end
 		end
 	end
 	gl.glEnd()
 			
-	fieldTex:unbind(0)
+	self.xfer.tex:unbind(0)
 	vectorFieldShader:useNone()
 	
 	gl.glDisable(gl.GL_BLEND)
