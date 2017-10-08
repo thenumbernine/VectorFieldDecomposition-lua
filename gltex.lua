@@ -15,19 +15,13 @@ local CLGLTexXFer = class()
 args:
 	env
 	domain, defaults to env.base
-	buffer
 	type
 	channels
-
-Because cl C structs are arbitrary, but GL has a fixed number of struct options,
-I'm going to go by args.type and args.channels instead of the args.buffer.type
 --]]
 function CLGLTexXFer:init(args)
 	self.env = assert(args.env, "expected env")
 	self.domain = assert(self.domain or self.env.base, "expected domain or env to have been constructed with a domain")
-	self.buffer = assert(args.buffer)
-	
-	self.type = args.type or self.buffer.type
+	self.type = args.type or self.env.real
 	self.channels = args.channels or 1
 
 	-- initialize upload-to-texture
@@ -55,7 +49,7 @@ function CLGLTexXFer:init(args)
 	end
 end
 
-function CLGLTexXFer:update()
+function CLGLTexXFer:update(buffer)
 	-- update the texture
 	if self.env.useGLSharing then
 		-- copy to GL using cl_*_gl_sharing
@@ -79,7 +73,7 @@ function CLGLTexXFer:update()
 		})[channels], "failed to find GL type for channels "..channels)
 		
 		self.env.cmds:enqueueReadBuffer{
-			buffer = self.buffer.obj,
+			buffer = buffer.obj,
 			block = true,
 			size = ffi.sizeof(self.type) * self.domain.volume * self.channels,
 			ptr = ptr,

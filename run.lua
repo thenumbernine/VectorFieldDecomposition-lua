@@ -36,21 +36,27 @@ function App:initGL()
 	local typeCode = [[
 typedef union {
 	real s[3];
+	struct { real s0, s1, s2; }; 
 	struct { real x, y, z; };
 } real3;
 ]]
 
 	ffi.cdef(typeCode)
 
-
 	env.code = table{
 		env.code,
 		typeCode,
-		[[
+		template([[
 #define _real3(x,y,z)	(real3){.s={x,y,z}}
 inline real3 real3_add(real3 a, real3 b) { return _real3(a.x + b.x, a.y + b.y, a.z + b.z); }
+inline real3 real3_sub(real3 a, real3 b) { return _real3(a.x - b.x, a.y - b.y, a.z - b.z); }
 inline real3 real3_scale(real3 a, real s) { return _real3(a.x * s, a.y * s, a.z * s); }
-]],
+
+constant const real3 dx = (real3){.s={<?=clnumber(dx.x)?>, <?=clnumber(dx.y)?>, <?=clnumber(dx.z)?>}};
+]], {
+	clnumber = clnumber,
+	dx = (xmax - xmin) / vec3d(self.env.base.size:unpack()),
+}),
 	}:concat'\n'
 
 		
@@ -98,17 +104,92 @@ inline real3 real3_scale(real3 a, real s) { return _real3(a.x * s, a.y * s, a.z 
 	xmax = xmax,
 	clnumber = clnumber,
 }),
-	}(self.fieldBuf)
+	}()
+
+	-- divergence of the field
+	self.divBuf = env:buffer{name='div', type='real'}
+	env:kernel{
+		argsOut = {self.divBuf},
+		argsIn = {self.fieldBuf},
+		body = template([[
+	div[index] = 0.;
+	<? for i=0,dim-1 do ?>{
+		int4 iR = i;
+		iR.s<?=i?> = min(i.s<?=i?> + 1, size.s<?=i?> - 1);
+		int4 iL = i;
+		iL.s<?=i?> = max(i.s<?=i?> - 1, 0);
+		div[index] += (field[indexForInt4(iR)].s<?=i?> 
+					- field[indexForInt4(iL)].s<?=i?>) / (2. * dx.s<?=i?>);
+	}<? end ?>
+]], {dim=self.env.base.dim}),
+	}()
+
+	-- inverse laplacian
+	self.potentialBuf = env:buffer{name='potential', type='real'}
+
+	-- initial guess
+	self.potentialBuf:copyFrom(self.divBuf)
+	
+	local lap = env:kernel{
+		argsOut = {{name='lap', type='real', obj=true}},
+		argsIn = {{name='div', type='real', obj=true}},
+		body = template([[
+	lap[index] = -(2. * dim) * div[index];
+	<? for i=0,env.base.dim-1 do ?>{
+		int4 iR = i;
+		iR.s<?=i?> = min(i.s<?=i?> + 1, size.s<?=i?> - 1);
+		int4 iL = i;
+		iL.s<?=i?> = max(i.s<?=i?> - 1, 0);
+		lap[index] += (div[indexForInt4(iR)] - div[indexForInt4(iL)]) / (dx.s<?=i?> * dx.s<?=i?>);
+	}<? end ?>
+]], {env=env}),
+	}
+	
+	-- lap phi = div
+	require 'solver.cl.gmres'{
+		env = env,
+		A = lap,
+		x = self.potentialBuf,
+		b = self.divBuf,
+		errorCallback = function(err, iter)
+			print(err, iter)
+		end,
+		epsilon = 1e-14,
+		maxiter = env.base.volume * 10,
+		restart = 10,
+	}()
+
+	-- gradient of the inv lap = curl-free
+	self.curlFreeBuf = env:buffer{name='curlFree', type='real3'}
+	env:kernel{
+		argsOut = {self.curlFreeBuf},
+		argsIn = {self.potentialBuf},
+		body = template([[
+	<? for i=0,env.base.dim-1 do ?>{
+		int4 iR = i;
+		iR.s<?=i?> = min(i.s<?=i?> + 1, size.s<?=i?> - 1);
+		int4 iL = i;
+		iL.s<?=i?> = max(i.s<?=i?> - 1, 0);
+		curlFree[index].s<?=i?> = (potential[indexForInt4(iR)] - potential[indexForInt4(iL)]) / (2. * dx.s<?=i?>);
+	}<? end ?>
+]], {env=env}),
+	}()
+
+	self.divFreeBuf = env:buffer{name='divFree', type='real3'}
+	env:kernel{
+		argsOut = {self.divFreeBuf},
+		argsIn = {self.fieldBuf, self.curlFreeBuf},
+		body = [[
+	divFree[index] = real3_sub(field[index], curlFree[index]);
+]],
+	}
 
 	local CLGLTexXFer = require 'gltex'
 	self.xfer = CLGLTexXFer{
 		env = env,
-		buffer = self.fieldBuf,
-		type = self.env.real,
+		type = self.env.real,	-- notice this means I'm only going to be copying real[3]'s into this texture
 		channels = 3,
 	}
-
-	self.xfer:update()
 end
 
 -- [[
@@ -161,6 +242,9 @@ function App:update()
 	gl.glClear(bit.bor(gl.GL_COLOR_BUFFER_BIT, gl.GL_DEPTH_BUFFER_BIT))
 
 	local env = self.env
+
+	-- call this upon switching what vector field will be displayed
+	self.xfer:update(self.curlFreeBuf)
 
 	gl.glDisable(gl.GL_CULL_FACE)
 	gl.glEnable(gl.GL_DEPTH_TEST)
