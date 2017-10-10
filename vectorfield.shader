@@ -6,12 +6,16 @@ if vertexShader then
 ?>
 
 uniform vec3 xmin, xmax;
+uniform float scale;
 
 <? if dim < 3 then ?>
 uniform sampler2D tex;
 <? else ?>
 uniform sampler3D tex;
 <? end ?>
+
+uniform float valueMin, valueMax;
+uniform sampler1D gradientTex;
 
 void main() {
 <? if dim < 3 then ?> 
@@ -54,9 +58,10 @@ void main() {
 <? end ?>
 
 	const float alpha = 1.;
-	color = vec4(1., 0., 0., alpha);
+	value = (value - valueMin) / (valueMax - valueMin);
+	color = texture1D(gradientTex, value); 
 
-	vec3 offset = gl_Vertex.xyz;
+	vec3 offset = gl_Vertex.xyz * scale * value;
 	vec3 v = gl_MultiTexCoord0.xyz * (xmax - xmin) + xmin + (offset.x * dir + offset.y * ty + offset.z * tz);
 	gl_Position = gl_ProjectionMatrix * gl_ModelViewMatrix * vec4(v, 1.);
 

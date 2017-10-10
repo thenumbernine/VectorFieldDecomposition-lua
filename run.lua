@@ -1,34 +1,40 @@
 #!/usr/bin/env luajit
+local bit = require 'bit'
 local ffi = require 'ffi'
 local gl = require 'ffi.OpenGL'
+local ig = require 'ffi.imgui'
 local vec3sz = require 'ffi.vec.vec3sz'
 local vec3d = require 'ffi.vec.vec3d'
 local class = require 'ext.class'
 local table = require 'ext.table'
 local range = require 'ext.range'
 local file = require 'ext.file'
-local GLApp = require 'glapp'
-local GLProgram = require 'gl.program'
+local gnuplot = require 'gnuplot'
+local template = require 'template'
+local ImGuiApp = require 'imguiapp'
 local Orbit = require 'glapp.orbit'
 local View = require 'glapp.view'
-local template = require 'template'
-local bit = require 'bit'
+local GLProgram = require 'gl.program'
+local GLGradientTex = require 'gl.gradienttex'
 local CLEnv = require 'cl.obj.env'
 local clnumber = require 'cl.obj.number'
 
-local n = 8
+local n = 10
 
 local xmin = vec3d(-1,-1,-1) * 1.5
 local xmax = vec3d(1,1,1) * 1.5
 
 local vectorFieldShader
 
+local vectorFieldScale = 1
 
-local App = class(Orbit(View.apply(GLApp)))
+local App = class(Orbit(View.apply(ImGuiApp)))
 
 App.viewDist = 5
 
 function App:initGL()
+	App.super.initGL(self)
+	
 	local env = CLEnv{size={n,n,n}}
 	self.env = env
 
@@ -59,9 +65,33 @@ constant const real3 dx = (real3){.s={<?=clnumber(dx.x)?>, <?=clnumber(dx.y)?>, 
 }),
 	}:concat'\n'
 
+
+	local gradTexWidth = 1024
+	self.gradientTex = GLGradientTex(gradTexWidth, {
+	-- [[ white, rainbow, black
+		{0,0,0,.5},	-- black ... ?
+		{0,0,1,1},	-- blue
+		{0,1,1,1},	-- cyan
+		{0,1,0,1},	-- green
+		{1,1,0,1},	-- yellow
+		{1,.5,0,1},	-- orange
+		{1,0,0,1},	-- red
+		{1,1,1,1},	-- white
+	--]]
+	--[[ stripes 
+		range(32):map(function(i)
+			return ({
+				{0,0,0,0},
+				{1,1,1,1},
+			})[i%2+1]
+		end):unpack()
+	--]]
+	}, false)
+	-- don't wrap the colors, but do use GL_REPEAT
+	self.gradientTex:setWrap{s = gl.GL_REPEAT}
+
 		
 	local code = file['vectorfield.shader']
-	
 	vectorFieldShader = GLProgram{
 		vertexCode = template(code, {
 			vertexShader = true,
@@ -75,6 +105,7 @@ constant const real3 dx = (real3){.s={<?=clnumber(dx.x)?>, <?=clnumber(dx.y)?>, 
 		}),
 		uniforms = {
 			tex = 0,
+			gradientTex = 1,
 		},
 	}
 	
@@ -146,18 +177,28 @@ constant const real3 dx = (real3){.s={<?=clnumber(dx.x)?>, <?=clnumber(dx.y)?>, 
 	}
 	
 	-- lap phi = div
+	local residuals = table()
 	require 'solver.cl.gmres'{
 		env = env,
 		A = lap,
 		x = self.potentialBuf,
 		b = self.divBuf,
-		errorCallback = function(err, iter)
-			print(err, iter)
+		errorCallback = function(residual, iter)
+			print(iter, residual)
+			residuals:insert(residual)
 		end,
-		epsilon = 1e-14,
+		epsilon = 1e-13,
 		maxiter = env.base.volume * 10,
 		restart = 10,
 	}()
+
+	gnuplot{
+		output = 'inverse laplace residual.png',
+		style = 'data lines',
+		log = 'y',
+		data = {residuals},
+		{using='0:1', title='residuals'},
+	}
 
 	-- gradient of the inv lap = curl-free
 	self.curlFreeBuf = env:buffer{name='curlFree', type='real3'}
@@ -182,6 +223,21 @@ constant const real3 dx = (real3){.s={<?=clnumber(dx.x)?>, <?=clnumber(dx.y)?>, 
 		body = [[
 	divFree[index] = real3_sub(field[index], curlFree[index]);
 ]],
+	}()
+
+
+	--[[ now try the algorithm that the paper suggests ...
+	1) start with random phi = lambda, mu, phi
+	2) minimize 1/4 |ds|^2 + 1/h^2 (eta - eta_0)^2
+	...where s = pi(phi)
+	eta = phi* alpha
+	alpha = h(dq, iq)
+	--]]	
+
+	self.displayVars = table{
+		{name='fieldBuf'},
+		{name='curlFreeBuf'},
+		{name='divFreeBuf'},
 	}
 
 	local CLGLTexXFer = require 'gltex'
@@ -239,12 +295,11 @@ if geom == gl.GL_TRIANGLES then
 end
 
 function App:update()
+	
 	gl.glClear(bit.bor(gl.GL_COLOR_BUFFER_BIT, gl.GL_DEPTH_BUFFER_BIT))
 
 	local env = self.env
 
-	-- call this upon switching what vector field will be displayed
-	self.xfer:update(self.curlFreeBuf)
 
 	gl.glDisable(gl.GL_CULL_FACE)
 	gl.glEnable(gl.GL_DEPTH_TEST)
@@ -254,36 +309,63 @@ function App:update()
 	local ar = self.width / self.height
 	self.view:setup(ar)
 
-	vectorFieldShader:use()
+	for _,var in ipairs(self.displayVars) do
+		if var.enabled then
+			self.xfer:update(self[var.name])
 
-	self.xfer.tex:bind(0)
-	
-	gl.glUniform3f(vectorFieldShader.uniforms.xmin.loc, xmin:unpack())
-	gl.glUniform3f(vectorFieldShader.uniforms.xmax.loc, xmax:unpack())
+			vectorFieldShader:use()
+			self.xfer.tex:bind(0)
+			self.gradientTex:bind(1)
+			
+			gl.glUniform1f(vectorFieldShader.uniforms.valueMin.loc, 0)
+			gl.glUniform1f(vectorFieldShader.uniforms.valueMax.loc, 1)
+			gl.glUniform1f(vectorFieldShader.uniforms.scale.loc, vectorFieldScale)
+			gl.glUniform3f(vectorFieldShader.uniforms.xmin.loc, xmin:unpack())
+			gl.glUniform3f(vectorFieldShader.uniforms.xmax.loc, xmax:unpack())
 
-	gl.glBegin(geom)
-	for k=0,tonumber(env.base.size.z-1) do
-		for j=0,tonumber(env.base.size.y-1) do
-			for i=0,tonumber(env.base.size.x-1) do
-				local x = (i + .5) / tonumber(env.base.size.x)
-				local y = (j + .5) / tonumber(env.base.size.y)
-				local z = (k + .5) / tonumber(env.base.size.z)
-				gl.glTexCoord3f(x, y, z)	
-				for _,t in ipairs(tris) do
-					if normals then gl.glNormal3f(normals[t]:unpack()) end
-					gl.glVertex3f(vtxs[t]:unpack())
+			gl.glBegin(geom)
+			for k=0,tonumber(env.base.size.z-1) do
+				for j=0,tonumber(env.base.size.y-1) do
+					for i=0,tonumber(env.base.size.x-1) do
+						local x = (i + .5) / tonumber(env.base.size.x)
+						local y = (j + .5) / tonumber(env.base.size.y)
+						local z = (k + .5) / tonumber(env.base.size.z)
+						gl.glTexCoord3f(x, y, z)	
+						for _,t in ipairs(tris) do
+							if normals then gl.glNormal3f(normals[t]:unpack()) end
+							gl.glVertex3f(vtxs[t]:unpack())
+						end
+					end
 				end
 			end
+			gl.glEnd()
+			
+			self.gradientTex:unbind(1)
+			self.xfer.tex:unbind(0)
+			vectorFieldShader:useNone()
 		end
 	end
-	gl.glEnd()
-			
-	self.xfer.tex:unbind(0)
-	vectorFieldShader:useNone()
-	
+
 	gl.glDisable(gl.GL_BLEND)
 	gl.glEnable(gl.GL_DEPTH_TEST)
 
+	App.super.update(self)
+end
+
+local bool = ffi.new'bool[1]'
+local float = ffi.new'float[1]'
+function App:updateGUI()
+	float[0] = vectorFieldScale
+	if ig.igInputFloat('scale', float) then
+		vectorFieldScale = float[0]
+	end
+
+	for _,var in ipairs(self.displayVars) do
+		bool[0] = not not var.enabled
+		if ig.igCheckbox(var.name, bool) then
+			var.enabled = bool[0]
+		end
+	end
 end
 
 App():run()
