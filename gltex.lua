@@ -22,7 +22,7 @@ function CLGLTexXFer:init(args)
 	self.env = assert(args.env, "expected env")
 	self.domain = assert(self.domain or self.env.base, "expected domain or env to have been constructed with a domain")
 	self.type = args.type or self.env.real
-	self.channels = args.channels or 1
+	self.channels = args.channels or 3
 
 	-- initialize upload-to-texture
 	local glTexClass = self.domain.dim < 3 and GLTex2D or GLTex3D
@@ -64,9 +64,19 @@ function CLGLTexXFer:update(buffer)
 		local ptr = self.bufferTexPtr
 		local tex = self.tex
 		
+		local channels = self.channels
+		
 		-- TODO this is going to depend on self.buffer.type
 		-- ... so is whether to convert the buffer from double to float or not ...
-		local channels = self.channels
+		-- right now I'm only supporting 1 channel ...
+		if buffer.type == 'real' or buffer.type == self.env.real then 
+			channels = 1 
+		elseif buffer.type == 'real3' then 
+			channels = 3
+		else
+			error("couldn't deduce number of channels in CL buffer")
+		end
+
 		local format = assert(({
 			[1] = gl.GL_RED,
 			[3] = gl.GL_RGB,
@@ -75,7 +85,7 @@ function CLGLTexXFer:update(buffer)
 		self.env.cmds:enqueueReadBuffer{
 			buffer = buffer.obj,
 			block = true,
-			size = ffi.sizeof(self.type) * self.domain.volume * self.channels,
+			size = ffi.sizeof(self.type) * self.domain.volume * channels,
 			ptr = ptr,
 		}
 		local destPtr = ptr

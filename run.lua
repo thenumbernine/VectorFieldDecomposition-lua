@@ -3,17 +3,14 @@ local bit = require 'bit'
 local ffi = require 'ffi'
 local gl = require 'ffi.OpenGL'
 local ig = require 'ffi.imgui'
-local vec3sz = require 'ffi.vec.vec3sz'
-local vec3d = require 'ffi.vec.vec3d'
+local vec3sz = require 'vec-ffi.vec3sz'
+local vec3d = require 'vec-ffi.vec3d'
 local class = require 'ext.class'
 local table = require 'ext.table'
 local range = require 'ext.range'
 local file = require 'ext.file'
 local gnuplot = require 'gnuplot'
 local template = require 'template'
-local ImGuiApp = require 'imguiapp'
-local Orbit = require 'glapp.orbit'
-local View = require 'glapp.view'
 local GLProgram = require 'gl.program'
 local GLGradientTex = require 'gl.gradienttex'
 local CLEnv = require 'cl.obj.env'
@@ -28,7 +25,7 @@ local vectorFieldShader
 
 local vectorFieldScale = 1
 
-local App = class(Orbit(View.apply(ImGuiApp)))
+local App = class(require 'glapp.orbit'(require 'imguiapp'))
 
 App.viewDist = 5
 
@@ -57,6 +54,9 @@ typedef union {
 inline real3 real3_add(real3 a, real3 b) { return _real3(a.x + b.x, a.y + b.y, a.z + b.z); }
 inline real3 real3_sub(real3 a, real3 b) { return _real3(a.x - b.x, a.y - b.y, a.z - b.z); }
 inline real3 real3_scale(real3 a, real s) { return _real3(a.x * s, a.y * s, a.z * s); }
+inline real real3_dot(real3 a, real3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+inline real real3_lenSq(real3 a) { return real3_dot(a, a); } 
+inline real real3_length(real3 a) { return sqrt(real3_lenSq(a)); } 
 
 constant const real3 dx = (real3){.s={<?=clnumber(dx.x)?>, <?=clnumber(dx.y)?>, <?=clnumber(dx.z)?>}};
 ]], {
@@ -124,12 +124,27 @@ constant const real3 dx = (real3){.s={<?=clnumber(dx.x)?>, <?=clnumber(dx.y)?>, 
 		((real)i.x + .5) / (real)size.x * (xmax.x - xmin.x) + xmin.x,
 		((real)i.y + .5) / (real)size.y * (xmax.y - xmin.y) + xmin.y,
 		((real)i.z + .5) / (real)size.z * (xmax.z - xmin.z) + xmin.z);
+	
+#if 0	//this was somewhere in the paper.  it looks very simiar to the z axis of the basis of a quaternion
 	real3 w1 = _real3(
 		x.x * x.z, 
 		x.y * x.z, 
 		1. - 2. * (x.x * x.x + x.y * x.y) - x.z * x.z);
 	real3 w2 = _real3(-x.y, x.x, 0);
-	field[index] = real3_add(real3_scale(w1, 1.5), w2);
+	field[index] = w2;//real3_add(real3_scale(w1, 1.5), w2);
+#endif
+#if 0	//add a x exp(-x^2) to the whole thing
+	real3 w1 = _real3(
+		x.x * x.z, 
+		x.y * x.z, 
+		1. - 2. * (x.x * x.x + x.y * x.y) - x.z * x.z);
+	real3 w2 = _real3(-x.y, x.x, 0);
+	real rSq = real3_lenSq(x);
+	field[index] = real3_scale(real3_add(real3_scale(w1, 1.5), w2), 1. / (rSq + 1.));
+#endif
+#if 1	//divergence, curl-free
+	field[index] = x;
+#endif
 ]], {
 	xmin = xmin,
 	xmax = xmax,
@@ -145,12 +160,12 @@ constant const real3 dx = (real3){.s={<?=clnumber(dx.x)?>, <?=clnumber(dx.y)?>, 
 		body = template([[
 	div[index] = 0.;
 	<? for i=0,dim-1 do ?>{
-		int4 iR = i;
-		iR.s<?=i?> = min(i.s<?=i?> + 1, size.s<?=i?> - 1);
-		int4 iL = i;
-		iL.s<?=i?> = max(i.s<?=i?> - 1, 0);
-		div[index] += (field[indexForInt4(iR)].s<?=i?> 
-					- field[indexForInt4(iL)].s<?=i?>) / (2. * dx.s<?=i?>);
+		int4 iR = i; iR.s<?=i?> = min(i.s<?=i?> + 1, size.s<?=i?> - 1);
+		int4 iL = i; iL.s<?=i?> = max(i.s<?=i?> - 1, 0);
+		div[index] += (
+			field[indexForInt4(iR)].s<?=i?> 
+			- field[indexForInt4(iL)].s<?=i?>
+		) / (2. * dx.s<?=i?>);
 	}<? end ?>
 ]], {dim=self.env.base.dim}),
 	}()
@@ -187,7 +202,7 @@ constant const real3 dx = (real3){.s={<?=clnumber(dx.x)?>, <?=clnumber(dx.y)?>, 
 			print(iter, residual)
 			residuals:insert(residual)
 		end,
-		epsilon = 1e-13,
+		epsilon = 1e-12,
 		maxiter = env.base.volume * 10,
 		restart = 10,
 	}()
@@ -225,7 +240,6 @@ constant const real3 dx = (real3){.s={<?=clnumber(dx.x)?>, <?=clnumber(dx.y)?>, 
 ]],
 	}()
 
-
 	--[[ now try the algorithm that the paper suggests ...
 	1) start with random phi = lambda, mu, phi
 	2) minimize 1/4 |ds|^2 + 1/h^2 (eta - eta_0)^2
@@ -236,16 +250,16 @@ constant const real3 dx = (real3){.s={<?=clnumber(dx.x)?>, <?=clnumber(dx.y)?>, 
 
 	self.displayVars = table{
 		{name='fieldBuf'},
+		{name='divBuf'},
+		{name='potentialBuf'},
 		{name='curlFreeBuf'},
 		{name='divFreeBuf'},
 	}
 
+	-- TODO instead of doing CL copies, how about an option for kernels to write out?
+	-- that's the faster method
 	local CLGLTexXFer = require 'gltex'
-	self.xfer = CLGLTexXFer{
-		env = env,
-		type = self.env.real,	-- notice this means I'm only going to be copying real[3]'s into this texture
-		channels = 3,
-	}
+	self.xfer = CLGLTexXFer{env = env}
 end
 
 -- [[
@@ -300,7 +314,6 @@ function App:update()
 
 	local env = self.env
 
-
 	gl.glDisable(gl.GL_CULL_FACE)
 	gl.glEnable(gl.GL_DEPTH_TEST)
 	--gl.glEnable(gl.GL_BLEND)
@@ -311,9 +324,13 @@ function App:update()
 
 	for _,var in ipairs(self.displayVars) do
 		if var.enabled then
-			self.xfer:update(self[var.name])
+			local buf = self[var.name]
+			self.xfer:update(buf)
+
+			local scalar = buf.type == 'real' or buf.type == self.env.real 
 
 			vectorFieldShader:use()
+			
 			self.xfer.tex:bind(0)
 			self.gradientTex:bind(1)
 			
@@ -323,7 +340,7 @@ function App:update()
 			gl.glUniform3f(vectorFieldShader.uniforms.xmin.loc, xmin:unpack())
 			gl.glUniform3f(vectorFieldShader.uniforms.xmax.loc, xmax:unpack())
 
-			gl.glBegin(geom)
+			gl.glBegin(scalar and gl.GL_POINTS or geom)
 			for k=0,tonumber(env.base.size.z-1) do
 				for j=0,tonumber(env.base.size.y-1) do
 					for i=0,tonumber(env.base.size.x-1) do
@@ -331,9 +348,13 @@ function App:update()
 						local y = (j + .5) / tonumber(env.base.size.y)
 						local z = (k + .5) / tonumber(env.base.size.z)
 						gl.glTexCoord3f(x, y, z)	
-						for _,t in ipairs(tris) do
-							if normals then gl.glNormal3f(normals[t]:unpack()) end
-							gl.glVertex3f(vtxs[t]:unpack())
+						if scalar then
+							gl.glVertex3f(0,0,0)
+						else
+							for _,t in ipairs(tris) do
+								if normals then gl.glNormal3f(normals[t]:unpack()) end
+								gl.glVertex3f(vtxs[t]:unpack())
+							end
 						end
 					end
 				end
