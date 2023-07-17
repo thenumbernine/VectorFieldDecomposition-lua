@@ -8,7 +8,7 @@ local vec3d = require 'vec-ffi.vec3d'
 local class = require 'ext.class'
 local table = require 'ext.table'
 local range = require 'ext.range'
-local file = require 'ext.file'
+local path = require 'ext.path'
 local gnuplot = require 'gnuplot'
 local template = require 'template'
 local GLProgram = require 'gl.program'
@@ -91,7 +91,7 @@ constant const real3 dx = (real3){.s={<?=clnumber(dx.x)?>, <?=clnumber(dx.y)?>, 
 	self.gradientTex:setWrap{s = gl.GL_REPEAT}
 
 		
-	local code = file['vectorfield.shader']
+	local code = path'vectorfield.shader':read()
 	vectorFieldShader = GLProgram{
 		vertexCode = template(code, {
 			vertexShader = true,
