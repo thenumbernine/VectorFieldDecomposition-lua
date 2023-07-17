@@ -37,7 +37,7 @@ function App:initGL()
 
 
 	local typeCode = [[
-typedef union real3 {
+typedef union {
 	real s[3];
 	struct { real s0, s1, s2; }; 
 	struct { real x, y, z; };
