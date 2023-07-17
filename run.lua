@@ -2,13 +2,13 @@
 local bit = require 'bit'
 local ffi = require 'ffi'
 local gl = require 'ffi.OpenGL'
-local ig = require 'ffi.imgui'
+local ig = require 'imgui'
 local vec3sz = require 'vec-ffi.vec3sz'
 local vec3d = require 'vec-ffi.vec3d'
 local class = require 'ext.class'
 local table = require 'ext.table'
 local range = require 'ext.range'
-local file = require 'ext.file'
+local path = require 'ext.path'
 local gnuplot = require 'gnuplot'
 local template = require 'template'
 local GLProgram = require 'gl.program'
@@ -23,9 +23,9 @@ local xmax = vec3d(1,1,1) * 1.5
 
 local vectorFieldShader
 
-local vectorFieldScale = 1
+vectorFieldScale = 1
 
-local App = class(require 'glapp.orbit'(require 'imguiapp'))
+local App = require 'imguiapp.withorbit'()
 
 App.viewDist = 5
 
@@ -91,7 +91,7 @@ constant const real3 dx = (real3){.s={<?=clnumber(dx.x)?>, <?=clnumber(dx.y)?>, 
 	self.gradientTex:setWrap{s = gl.GL_REPEAT}
 
 		
-	local code = file['vectorfield.shader']
+	local code = path'vectorfield.shader':read()
 	vectorFieldShader = GLProgram{
 		vertexCode = template(code, {
 			vertexShader = true,
@@ -373,19 +373,11 @@ function App:update()
 	App.super.update(self)
 end
 
-local bool = ffi.new'bool[1]'
-local float = ffi.new'float[1]'
 function App:updateGUI()
-	float[0] = vectorFieldScale
-	if ig.igInputFloat('scale', float) then
-		vectorFieldScale = float[0]
-	end
+	ig.luatableInputFloat('scale', _G, 'vectorFieldScale')
 
 	for _,var in ipairs(self.displayVars) do
-		bool[0] = not not var.enabled
-		if ig.igCheckbox(var.name, bool) then
-			var.enabled = bool[0]
-		end
+		ig.luatableCheckbox(var.name, var, 'enabled')
 	end
 end
 
