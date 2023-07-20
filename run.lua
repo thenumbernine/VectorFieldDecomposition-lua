@@ -88,7 +88,7 @@ constant const real3 dx = (real3){.s={<?=clnumber(dx.x)?>, <?=clnumber(dx.y)?>, 
 	--]]
 	}, false)
 	-- don't wrap the colors, but do use GL_REPEAT
-	self.gradientTex:setWrap{s = gl.GL_REPEAT}
+		:setWrap{s = gl.GL_REPEAT}
 
 		
 	local code = path'vectorfield.shader':read()
