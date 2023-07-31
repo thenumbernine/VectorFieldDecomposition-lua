@@ -4,7 +4,7 @@ it handles allocating and transferring to a gl texture
 it uses gl sharing when available
 --]]
 local ffi = require 'ffi'
-local gl = require 'ffi.OpenGL'
+local gl = require 'gl'
 local class = require 'ext.class'
 local GLTex2D = require 'gl.tex2d'
 local GLTex3D = require 'gl.tex3d'
