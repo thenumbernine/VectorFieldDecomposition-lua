@@ -107,7 +107,7 @@ constant const real3 dx = (real3){.s={<?=clnumber(dx.x)?>, <?=clnumber(dx.y)?>, 
 			tex = 0,
 			gradientTex = 1,
 		},
-	}
+	}:useNone()
 	
 	-- allocate cl buffer
 	self.fieldBuf = env:buffer{name='field', type='real3'}
