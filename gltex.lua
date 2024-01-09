@@ -54,12 +54,12 @@ function CLGLTexXFer:update(buffer)
 	if self.env.useGLSharing then
 		-- copy to GL using cl_*_gl_sharing
 		gl.glFinish()
-		self.env.cmds:enqueueAcquireGLObjects{objs={self.texCLMem}}
+		self.env.cmds[1]:enqueueAcquireGLObjects{objs={self.texCLMem}}
 
 		copyFieldToTex()
 		
-		self.env.cmds:enqueueReleaseGLObjects{objs={self.texCLMem}}
-		self.env.cmds:finish()
+		self.env.cmds[1]:enqueueReleaseGLObjects{objs={self.texCLMem}}
+		self.env.cmds[1]:finish()
 	else
 		local ptr = self.bufferTexPtr
 		local tex = self.tex
@@ -82,7 +82,7 @@ function CLGLTexXFer:update(buffer)
 			[3] = gl.GL_RGB,
 		})[channels], "failed to find GL type for channels "..channels)
 		
-		self.env.cmds:enqueueReadBuffer{
+		self.env.cmds[1]:enqueueReadBuffer{
 			buffer = buffer.obj,
 			block = true,
 			size = ffi.sizeof(self.type) * self.domain.volume * channels,

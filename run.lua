@@ -377,6 +377,7 @@ function App:updateGUI()
 	ig.luatableInputFloat('scale', _G, 'vectorFieldScale')
 
 	for _,var in ipairs(self.displayVars) do
+		var.enabled = var.enabled or false
 		ig.luatableCheckbox(var.name, var, 'enabled')
 	end
 end
